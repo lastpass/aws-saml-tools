@@ -26,6 +26,7 @@
 import sys
 import re
 import requests
+import pickle
 import hmac
 import hashlib
 import binascii
@@ -54,6 +55,28 @@ logger = logging.getLogger('lp-aws-saml')
 
 class MfaRequiredException(Exception):
     pass
+
+
+def save_cookies(session, filename):
+    if not os.path.isdir(os.path.dirname(filename)):
+        return False
+    with open(filename, 'w') as f:
+        f.truncate()
+        pickle.dump(session.cookies._cookies, f)
+
+
+def load_cookies(session, filename):
+    if not os.path.isfile(filename):
+        return False
+    with open(filename) as f:
+        cookies = pickle.load(f)
+        if cookies:
+            jar = requests.cookies.RequestsCookieJar()
+            jar._cookies = cookies
+            session.cookies = jar
+        else:
+            return False
+
 
 def should_verify():
     """ Disable SSL validation only when debugging via proxy """
@@ -170,7 +193,7 @@ def lastpass_login(session, username, password, otp = None):
             raise ValueError("Could not login to lastpass: %s" % reason)
 
 
-def get_saml_token(session, username, password, saml_cfg_id):
+def get_saml_token(session, username, saml_cfg_id, password=None):
     """
     Log into LastPass and retrieve a SAML token for a given
     SAML configuration.
@@ -308,16 +331,18 @@ def main():
     else:
         profile_name = username
     
-    password = getpass()
-
     session = requests.Session()
-    try:
-      lastpass_login(session, username, password)
-    except MfaRequiredException:
-      otp = input("OTP: ")
-      lastpass_login(session, username, password, otp)
+    load_cookies(session, './lp_session')
 
-    assertion = get_saml_token(session, username, password, saml_cfg_id)
+    try:
+        assertion = get_saml_token(session, username, saml_cfg_id)
+    except KeyError:
+        password = getpass()
+        otp = input("OTP: ")
+        lastpass_login(session, username, password, otp)
+        save_cookies(session, './lp_session')
+        assertion = get_saml_token(session, username, saml_cfg_id, password)
+
     roles = get_saml_aws_roles(assertion)
     user = get_saml_nameid(assertion)
 
