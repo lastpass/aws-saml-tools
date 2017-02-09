@@ -332,7 +332,7 @@ def main():
     parser = argparse.ArgumentParser(description='Get temporary AWS access credentials using LastPass SAML Login')
     parser.add_argument('--username', type=str, default=defaults['username'],
                         help='the lastpass username')
-    parser.add_argument('--saml_config_id', type=int, default=int(defaults['saml_config_id']),
+    parser.add_argument('--saml-config-id', type=int, default=int(defaults['saml_config_id']),
                         help='the lastpass SAML config id')
     parser.add_argument('--profile-name', dest='profile_name', default=defaults['profile_name'],
                         help='the name of AWS profile to save the data in (default username)')
