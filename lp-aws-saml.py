@@ -23,7 +23,6 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-import sys
 import re
 import requests
 import pickle
@@ -45,7 +44,8 @@ from six.moves import configparser
 from getpass import getpass
 
 LASTPASS_SERVER = 'https://lastpass.com'
-
+COOKIE_FILE = os.path.expanduser('~/.lp_session')
+CONFIG_FILE = os.path.expanduser('~/.lp_config')
 # for debugging with proxy
 PROXY_SERVER = 'https://127.0.0.1:8443'
 # LASTPASS_SERVER = PROXY_SERVER
@@ -69,7 +69,10 @@ def load_cookies(session, filename):
     if not os.path.isfile(filename):
         return False
     with open(filename) as f:
-        cookies = pickle.load(f)
+        try:
+            cookies = pickle.load(f)
+        except EOFError:
+            return False
         if cookies:
             jar = requests.cookies.RequestsCookieJar()
             jar._cookies = cookies
@@ -312,14 +315,27 @@ def aws_set_profile(profile_name, response):
         config.write(out)
 
 
+def read_lp_config():
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    defaults = {}
+    for field in ['username', 'saml_config_id', 'profile_name']:
+        try:
+            defaults[field] = config.get('aws', field)
+        except configparser.NoOptionError:
+            pass
+    return defaults 
+
+
 def main():
+    defaults = read_lp_config()
     parser = argparse.ArgumentParser(description='Get temporary AWS access credentials using LastPass SAML Login')
-    parser.add_argument('username', type=str,
-                    help='the lastpass username')
-    parser.add_argument('saml_config_id', type=int,
-                    help='the lastpass SAML config id')
-    parser.add_argument('--profile-name', dest='profile_name',
-                    help='the name of AWS profile to save the data in (default username)')
+    parser.add_argument('--username', type=str, default=defaults['username'],
+                        help='the lastpass username')
+    parser.add_argument('--saml_config_id', type=int, default=int(defaults['saml_config_id']),
+                        help='the lastpass SAML config id')
+    parser.add_argument('--profile-name', dest='profile_name', default=defaults['profile_name'],
+                        help='the name of AWS profile to save the data in (default username)')
 
     args = parser.parse_args()
     
@@ -332,7 +348,7 @@ def main():
         profile_name = username
     
     session = requests.Session()
-    load_cookies(session, './lp_session')
+    load_cookies(session, COOKIE_FILE)
 
     try:
         assertion = get_saml_token(session, username, saml_cfg_id)
@@ -340,7 +356,7 @@ def main():
         password = getpass()
         otp = input("OTP: ")
         lastpass_login(session, username, password, otp)
-        save_cookies(session, './lp_session')
+        save_cookies(session, COOKIE_FILE)
         assertion = get_saml_token(session, username, saml_cfg_id, password)
 
     roles = get_saml_aws_roles(assertion)
