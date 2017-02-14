@@ -65,8 +65,8 @@ A file named `~/.lp_session` stores the lastpass session so a second execution o
 ## AWS additional configuration
 In order for the created aws credentials to be available as environment variables put the following in your `.bashrc`:
 ```
-export AWS_ACCESS_KEY_ID=$(gsed -nr "/^\[username@example.com\]/ { :l /^aws_access_key_id[ ]*=/ { s/aws_access_key_id = [ ]*//; p; q;}; n; b l;}" ~/.aws/credentials)
-export AWS_SESSION_TOKEN=$(gsed -nr "/^\[username@example.com\]/ { :l /^aws_session_token[ ]*=/ { s/aws_session_token = [ ]*//; p; q;}; n; b l;}" ~/.aws/credentials)
-export AWS_SECRET_ACCESS_KEY=$(gsed -nr "/^\[username@example.com\]/ { :l /^aws_secret_access_key[ ]*=/ { s/aws_secret_access_key = [ ]*//; p; q;}; n; b l;}" ~/.aws/credentials)
+export AWS_ACCESS_KEY_ID=$(sed -nr "/^\[username@example.com\]/ { :l /^aws_access_key_id[ ]*=/ { s/aws_access_key_id = [ ]*//; p; q;}; n; b l;}" ~/.aws/credentials)
+export AWS_SESSION_TOKEN=$(sed -nr "/^\[username@example.com\]/ { :l /^aws_session_token[ ]*=/ { s/aws_session_token = [ ]*//; p; q;}; n; b l;}" ~/.aws/credentials)
+export AWS_SECRET_ACCESS_KEY=$(sed -nr "/^\[username@example.com\]/ { :l /^aws_secret_access_key[ ]*=/ { s/aws_secret_access_key = [ ]*//; p; q;}; n; b l;}" ~/.aws/credentials)
 export AWS_SECURITY_TOKEN=$AWS_SESSION_TOKEN
 ```
