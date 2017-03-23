@@ -63,7 +63,7 @@ profile_name = username@example.com
 A file named `~/.lp_session` stores the lastpass session so a second execution of this script which cookie timeout doesn't require password entry.
 
 ## AWS additional configuration
-In order for the created aws credentials to be available as environment variables put the following in your `.bashrc`:
+In order for the created aws credentials to be available as environment variables put the following in your `.bashrc` (just replace the generic email with yours and call this AFTER you call the lp-aws-saml.py script:
 ```
 export AWS_ACCESS_KEY_ID=$(sed -nr "/^\[username@example.com\]/ { :l /^aws_access_key_id[ ]*=/ { s/aws_access_key_id = [ ]*//; p; q;}; n; b l;}" ~/.aws/credentials)
 export AWS_SESSION_TOKEN=$(sed -nr "/^\[username@example.com\]/ { :l /^aws_session_token[ ]*=/ { s/aws_session_token = [ ]*//; p; q;}; n; b l;}" ~/.aws/credentials)
