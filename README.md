@@ -29,7 +29,7 @@ LastPass AWS configuration page for more information.
 
 First you will need to look up the LastPass SAML configuration ID for the AWS
 instance you wish to control.  This can be obtained from the generated
-Launch URL: if the launch URL is `https://lastpass.com/saml/launch/cfg/25`
+Launch URL (which is shown in the last-pass extension if you try to edit the details to that entry): if the launch URL is `https://lastpass.com/saml/launch/cfg/25`
 then the configuration ID is `25`.
 
 Then launch the tool to login to lastpass.  You will be prompted for
