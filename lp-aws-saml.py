@@ -336,11 +336,13 @@ def main():
                         help='the lastpass SAML config id')
     parser.add_argument('--profile-name', dest='profile_name', default=defaults['profile_name'],
                         help='the name of AWS profile to save the data in (default username)')
+    parser.add_argument('--silent-on-success', type=str, default='False', help='dont print anything on success')
 
     args = parser.parse_args()
     
     username = args.username
     saml_cfg_id = args.saml_config_id
+    quiet = bool(args.silent_on_success=='True')
 
     if args.profile_name is not None:
         profile_name = args.profile_name
@@ -367,12 +369,13 @@ def main():
     response = aws_assume_role(session, assertion, role[0], role[1])
     aws_set_profile(profile_name, response)
 
-    print "A new AWS CLI profile '%s' has been added." % profile_name
-    print "You may now invoke the aws CLI tool as follows:"
-    print
-    print "    aws --profile %s [...] " % profile_name
-    print
-    print "This token expires in one hour."
+    if not quiet:
+        print "A new AWS CLI profile '%s' has been added." % profile_name
+        print "You may now invoke the aws CLI tool as follows:"
+        print
+        print "    aws --profile %s [...] " % profile_name
+        print
+        print "This token expires in one hour."
 
 
 if __name__ == "__main__":
