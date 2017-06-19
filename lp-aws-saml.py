@@ -23,25 +23,24 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-import re
-import requests
-import pickle
-import hmac
-import hashlib
+import ConfigParser
+import argparse
 import binascii
+import hashlib
+import hmac
 import logging
+import os
+import pickle
+import re
 import xml.etree.ElementTree as ET
 from base64 import b64decode, b64encode
+from getpass import getpass
 from struct import pack
-import os
-import argparse
 
 import boto3
-from six.moves import input
+import requests
 from six.moves import html_parser
-from six.moves import configparser
-
-from getpass import getpass
+from six.moves import input
 
 LASTPASS_SERVER = 'https://lastpass.com'
 COOKIE_FILE = os.path.expanduser('~/.lp_session')
@@ -52,6 +51,7 @@ PROXY_SERVER = 'https://127.0.0.1:8443'
 
 logging.basicConfig(level=logging.CRITICAL)
 logger = logging.getLogger('lp-aws-saml')
+
 
 class MfaRequiredException(Exception):
     pass
@@ -163,7 +163,7 @@ def lastpass_iterations(session, username):
     return iterations
 
 
-def lastpass_login(session, username, password, otp = None):
+def lastpass_login(session, username, password, otp=None):
     """
     Log into LastPass with a given username and password.
     """
@@ -278,9 +278,9 @@ def prompt_for_role(roles):
 def aws_assume_role(session, assertion, role_arn, principal_arn):
     client = boto3.client('sts')
     return client.assume_role_with_saml(
-                RoleArn=role_arn,
-                PrincipalArn=principal_arn,
-                SAMLAssertion=b64encode(assertion))
+        RoleArn=role_arn,
+        PrincipalArn=principal_arn,
+        SAMLAssertion=b64encode(assertion))
 
 
 def aws_set_profile(profile_name, response):
@@ -291,14 +291,18 @@ def aws_set_profile(profile_name, response):
     """
     config_fn = os.path.expanduser("~/.aws/credentials")
 
-    config = configparser.ConfigParser()
+    config = ConfigParser.ConfigParser()
+    ConfigParser.DEFAULTSECT = 'default'
     config.read(config_fn)
 
-    section = profile_name
-    try:
-        config.add_section(section)
-    except configparser.DuplicateSectionError:
-        pass
+    if profile_name == 'default':
+        section = ConfigParser.DEFAULTSECT
+    else:
+        section = profile_name
+        try:
+            config.add_section(section)
+        except ConfigParser.DuplicateSectionError:
+            pass
 
     try:
         os.makedirs(os.path.dirname(config_fn))
@@ -311,20 +315,21 @@ def aws_set_profile(profile_name, response):
                response['Credentials']['SecretAccessKey'])
     config.set(section, 'aws_session_token',
                response['Credentials']['SessionToken'])
+
     with open(config_fn, 'w') as out:
         config.write(out)
 
 
 def read_lp_config():
-    config = configparser.ConfigParser()
+    config = ConfigParser.ConfigParser()
     config.read(CONFIG_FILE)
-    defaults = {}
+    defaults = {'profile_name': 'default'}
     for field in ['username', 'saml_config_id', 'profile_name']:
         try:
             defaults[field] = config.get('aws', field)
-        except configparser.NoOptionError:
+        except ConfigParser.NoOptionError:
             pass
-    return defaults 
+    return defaults
 
 
 def main():
@@ -339,16 +344,16 @@ def main():
     parser.add_argument('--silent-on-success', type=str, default='False', help='dont print anything on success')
 
     args = parser.parse_args()
-    
+
     username = args.username
     saml_cfg_id = args.saml_config_id
-    quiet = bool(args.silent_on_success=='True')
+    quiet = bool(args.silent_on_success == 'True')
 
     if args.profile_name is not None:
         profile_name = args.profile_name
     else:
         profile_name = username
-    
+
     session = requests.Session()
     load_cookies(session, COOKIE_FILE)
 
