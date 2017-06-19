@@ -23,28 +23,28 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-import sys
-import re
-import requests
-import hmac
-import hashlib
+import ConfigParser
+import argparse
 import binascii
+import hashlib
+import hmac
 import logging
+import os
+import pickle
+import re
 import xml.etree.ElementTree as ET
 from base64 import b64decode, b64encode
+from getpass import getpass
 from struct import pack
-import os
-import argparse
 
 import boto3
-from six.moves import input
+import requests
 from six.moves import html_parser
-from six.moves import configparser
-
-from getpass import getpass
+from six.moves import input
 
 LASTPASS_SERVER = 'https://lastpass.com'
-
+COOKIE_FILE = os.path.expanduser('~/.lp_session')
+CONFIG_FILE = os.path.expanduser('~/.lp_config')
 # for debugging with proxy
 PROXY_SERVER = 'https://127.0.0.1:8443'
 # LASTPASS_SERVER = PROXY_SERVER
@@ -52,8 +52,34 @@ PROXY_SERVER = 'https://127.0.0.1:8443'
 logging.basicConfig(level=logging.CRITICAL)
 logger = logging.getLogger('lp-aws-saml')
 
+
 class MfaRequiredException(Exception):
     pass
+
+
+def save_cookies(session, filename):
+    if not os.path.isdir(os.path.dirname(filename)):
+        return False
+    with open(filename, 'w') as f:
+        f.truncate()
+        pickle.dump(session.cookies._cookies, f)
+
+
+def load_cookies(session, filename):
+    if not os.path.isfile(filename):
+        return False
+    with open(filename) as f:
+        try:
+            cookies = pickle.load(f)
+        except EOFError:
+            return False
+        if cookies:
+            jar = requests.cookies.RequestsCookieJar()
+            jar._cookies = cookies
+            session.cookies = jar
+        else:
+            return False
+
 
 def should_verify():
     """ Disable SSL validation only when debugging via proxy """
@@ -137,7 +163,7 @@ def lastpass_iterations(session, username):
     return iterations
 
 
-def lastpass_login(session, username, password, otp = None):
+def lastpass_login(session, username, password, otp=None):
     """
     Log into LastPass with a given username and password.
     """
@@ -170,7 +196,7 @@ def lastpass_login(session, username, password, otp = None):
             raise ValueError("Could not login to lastpass: %s" % reason)
 
 
-def get_saml_token(session, username, password, saml_cfg_id):
+def get_saml_token(session, username, saml_cfg_id, password=None):
     """
     Log into LastPass and retrieve a SAML token for a given
     SAML configuration.
@@ -252,9 +278,9 @@ def prompt_for_role(roles):
 def aws_assume_role(session, assertion, role_arn, principal_arn):
     client = boto3.client('sts')
     return client.assume_role_with_saml(
-                RoleArn=role_arn,
-                PrincipalArn=principal_arn,
-                SAMLAssertion=b64encode(assertion))
+        RoleArn=role_arn,
+        PrincipalArn=principal_arn,
+        SAMLAssertion=b64encode(assertion))
 
 
 def aws_set_profile(profile_name, response):
@@ -265,14 +291,18 @@ def aws_set_profile(profile_name, response):
     """
     config_fn = os.path.expanduser("~/.aws/credentials")
 
-    config = configparser.ConfigParser()
+    config = ConfigParser.ConfigParser()
+    ConfigParser.DEFAULTSECT = 'default'
     config.read(config_fn)
 
-    section = profile_name
-    try:
-        config.add_section(section)
-    except configparser.DuplicateSectionError:
-        pass
+    if profile_name == 'default':
+        section = ConfigParser.DEFAULTSECT
+    else:
+        section = profile_name
+        try:
+            config.add_section(section)
+        except ConfigParser.DuplicateSectionError:
+            pass
 
     try:
         os.makedirs(os.path.dirname(config_fn))
@@ -285,39 +315,57 @@ def aws_set_profile(profile_name, response):
                response['Credentials']['SecretAccessKey'])
     config.set(section, 'aws_session_token',
                response['Credentials']['SessionToken'])
+
     with open(config_fn, 'w') as out:
         config.write(out)
 
 
+def read_lp_config():
+    config = ConfigParser.ConfigParser()
+    config.read(CONFIG_FILE)
+    defaults = {'profile_name': 'default'}
+    for field in ['username', 'saml_config_id', 'profile_name']:
+        try:
+            defaults[field] = config.get('aws', field)
+        except ConfigParser.NoOptionError:
+            pass
+    return defaults
+
+
 def main():
+    defaults = read_lp_config()
     parser = argparse.ArgumentParser(description='Get temporary AWS access credentials using LastPass SAML Login')
-    parser.add_argument('username', type=str,
-                    help='the lastpass username')
-    parser.add_argument('saml_config_id', type=int,
-                    help='the lastpass SAML config id')
-    parser.add_argument('--profile-name', dest='profile_name',
-                    help='the name of AWS profile to save the data in (default username)')
+    parser.add_argument('--username', type=str, default=defaults['username'],
+                        help='the lastpass username')
+    parser.add_argument('--saml-config-id', type=int, default=int(defaults['saml_config_id']),
+                        help='the lastpass SAML config id')
+    parser.add_argument('--profile-name', dest='profile_name', default=defaults['profile_name'],
+                        help='the name of AWS profile to save the data in (default username)')
+    parser.add_argument('--silent-on-success', type=str, default='False', help='dont print anything on success')
 
     args = parser.parse_args()
-    
+
     username = args.username
     saml_cfg_id = args.saml_config_id
+    quiet = bool(args.silent_on_success == 'True')
 
     if args.profile_name is not None:
         profile_name = args.profile_name
     else:
         profile_name = username
-    
-    password = getpass()
 
     session = requests.Session()
-    try:
-      lastpass_login(session, username, password)
-    except MfaRequiredException:
-      otp = input("OTP: ")
-      lastpass_login(session, username, password, otp)
+    load_cookies(session, COOKIE_FILE)
 
-    assertion = get_saml_token(session, username, password, saml_cfg_id)
+    try:
+        assertion = get_saml_token(session, username, saml_cfg_id)
+    except KeyError:
+        password = getpass()
+        otp = input("OTP: ")
+        lastpass_login(session, username, password, otp)
+        save_cookies(session, COOKIE_FILE)
+        assertion = get_saml_token(session, username, saml_cfg_id, password)
+
     roles = get_saml_aws_roles(assertion)
     user = get_saml_nameid(assertion)
 
@@ -326,12 +374,13 @@ def main():
     response = aws_assume_role(session, assertion, role[0], role[1])
     aws_set_profile(profile_name, response)
 
-    print "A new AWS CLI profile '%s' has been added." % profile_name
-    print "You may now invoke the aws CLI tool as follows:"
-    print
-    print "    aws --profile %s [...] " % profile_name
-    print
-    print "This token expires in one hour."
+    if not quiet:
+        print "A new AWS CLI profile '%s' has been added." % profile_name
+        print "You may now invoke the aws CLI tool as follows:"
+        print
+        print "    aws --profile %s [...] " % profile_name
+        print
+        print "This token expires in one hour."
 
 
 if __name__ == "__main__":
