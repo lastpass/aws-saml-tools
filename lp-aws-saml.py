@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 # -*- coding: utf8 -*-
 #
 # Amazon Web Services CLI - LastPass SAML integration
@@ -249,12 +249,13 @@ def prompt_for_role(roles):
     return roles[choice - 1]
 
 
-def aws_assume_role(session, assertion, role_arn, principal_arn):
+def aws_assume_role(session, assertion, role_arn, principal_arn, duration):
     client = boto3.client('sts')
     return client.assume_role_with_saml(
                 RoleArn=role_arn,
                 PrincipalArn=principal_arn,
-                SAMLAssertion=b64encode(assertion))
+                SAMLAssertion=b64encode(assertion),
+                DurationSeconds=duration)
 
 
 def aws_set_profile(profile_name, response):
@@ -297,9 +298,11 @@ def main():
                     help='the lastpass SAML config id')
     parser.add_argument('--profile-name', dest='profile_name',
                     help='the name of AWS profile to save the data in (default username)')
+    parser.add_argument('--duration', dest='duration', type=int,
+                    help='the duration, in seconds, of the role session (default 3600)')
 
     args = parser.parse_args()
-    
+
     username = args.username
     saml_cfg_id = args.saml_config_id
 
@@ -307,7 +310,12 @@ def main():
         profile_name = args.profile_name
     else:
         profile_name = username
-    
+
+    if args.duration is not None:
+        duration = args.duration
+    else:
+        duration = 3600
+
     password = getpass()
 
     session = requests.Session()
@@ -323,7 +331,7 @@ def main():
 
     role = prompt_for_role(roles)
 
-    response = aws_assume_role(session, assertion, role[0], role[1])
+    response = aws_assume_role(session, assertion, role[0], role[1], duration)
     aws_set_profile(profile_name, response)
 
     print "A new AWS CLI profile '%s' has been added." % profile_name
@@ -331,7 +339,7 @@ def main():
     print
     print "    aws --profile %s [...] " % profile_name
     print
-    print "This token expires in one hour."
+    print "This token expires in %d seconds." % duration
 
 
 if __name__ == "__main__":
