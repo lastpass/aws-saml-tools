@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf8 -*-
 #
 # Amazon Web Services CLI - LastPass SAML integration
@@ -42,6 +42,8 @@ from six.moves import html_parser
 from six.moves import configparser
 
 from getpass import getpass
+from lastpass import fetcher
+
 
 LASTPASS_SERVER = 'https://lastpass.com'
 
@@ -83,92 +85,6 @@ def extract_form(html):
     return form
 
 
-def xorbytes(a, b):
-    """ xor all bytes in a string """
-    return ''.join(map(lambda x, y: chr(ord(x) ^ ord(y)), a, b))
-
-
-def prf(h, data):
-    """ internal hash update for pbkdf2/hmac-sha256 """
-    hm = h.copy()
-    hm.update(data)
-    return hm.digest()
-
-
-def pbkdf2(password, salt, rounds, length):
-    """
-    PBKDF2-SHA256 password derivation.
-    """
-    key = ''
-    h = hmac.new(password, None, hashlib.sha256)
-    for block in range(0, (length + 31) / 32):
-        ib = hval = prf(h, salt + pack(">I", block + 1))
-
-        for i in range(1, rounds):
-            hval = prf(h, hval)
-            ib = xorbytes(ib, hval)
-
-        key = key + ib
-    return binascii.hexlify(key[0:length])
-
-
-def lastpass_login_hash(username, password, iterations):
-    """
-    Determine the number of PBKDF2 iterations needed for a user.
-    """
-    key = binascii.unhexlify(pbkdf2(password, username, iterations, 32))
-    result = pbkdf2(key, password, 1, 32)
-    return result
-
-
-def lastpass_iterations(session, username):
-    """
-    Determine the number of PBKDF2 iterations needed for a user.
-    """
-    iterations = 5000
-    lp_iterations_page = '%s/iterations.php' % LASTPASS_SERVER
-    params = {
-        'email': username
-    }
-    r = session.post(lp_iterations_page, data=params, verify=should_verify())
-    if r.status_code == 200:
-        iterations = int(r.text)
-
-    return iterations
-
-
-def lastpass_login(session, username, password, otp = None):
-    """
-    Log into LastPass with a given username and password.
-    """
-    logger.debug("logging into lastpass as %s" % username)
-    iterations = lastpass_iterations(session, username)
-
-    lp_login_page = '%s/login.php' % LASTPASS_SERVER
-
-    params = {
-        'method': 'web',
-        'xml': '1',
-        'username': username,
-        'hash': lastpass_login_hash(username, password, iterations),
-        'iterations': iterations
-    }
-    if otp is not None:
-        params['otp'] = otp
-
-    r = session.post(lp_login_page, data=params, verify=should_verify())
-    r.raise_for_status()
-
-    doc = ET.fromstring(r.text)
-    error = doc.find("error")
-    if error is not None:
-        cause = error.get('cause')
-        if cause == 'googleauthrequired':
-            raise MfaRequiredException('Need MFA for this login')
-        else:
-            reason = error.get('message')
-            raise ValueError("Could not login to lastpass: %s" % reason)
-
 
 def get_saml_token(session, username, password, saml_cfg_id):
     """
@@ -180,7 +96,7 @@ def get_saml_token(session, username, password, saml_cfg_id):
     # now logged in, grab the SAML token from the IdP-initiated login
     idp_login = '%s/saml/launch/cfg/%d' % (LASTPASS_SERVER, saml_cfg_id)
 
-    r = session.get(idp_login, verify=should_verify())
+    r = requests.get(idp_login,cookies={'PHPSESSID': session.id}, verify=should_verify())
 
     form = extract_form(r.text)
     if not form['action']:
@@ -233,10 +149,10 @@ def prompt_for_role(roles):
     if len(roles) == 1:
         return roles[0]
 
-    print 'Please select a role:'
+    print ('Please select a role:')
     count = 1
     for r in roles:
-        print '  %d) %s' % (count, r[0])
+        print ('  %d) %s' % (count, r[0]))
         count = count + 1
 
     choice = 0
@@ -249,12 +165,35 @@ def prompt_for_role(roles):
     return roles[choice - 1]
 
 
-def aws_assume_role(session, assertion, role_arn, principal_arn):
-    client = boto3.client('sts')
-    return client.assume_role_with_saml(
+def aws_assume_role(assertion, role_arn, principal_arn):
+    client = boto3.client('sts',
+        aws_access_key_id="",
+        aws_secret_access_key="",
+        aws_session_token="",
+    )
+    short_creds = client.assume_role_with_saml(
                 RoleArn=role_arn,
                 PrincipalArn=principal_arn,
-                SAMLAssertion=b64encode(assertion))
+                SAMLAssertion=b64encode(assertion).decode("utf-8"),
+                DurationSeconds=900)
+    credentials = short_creds['Credentials']
+    role_name = role_arn.rsplit('/', 1)[1]
+    iam = boto3.resource(
+        'iam',
+        aws_access_key_id=credentials['AccessKeyId'],
+        aws_secret_access_key=credentials['SecretAccessKey'],
+        aws_session_token=credentials['SessionToken'],
+    )
+    try:
+        duration = iam.Role(role_name).max_session_duration
+    except:
+        return [short_creds,900]
+
+    return [client.assume_role_with_saml(
+                RoleArn=role_arn,
+                PrincipalArn=principal_arn,
+                SAMLAssertion=b64encode(assertion).decode("utf-8"),
+                DurationSeconds=duration) , duration ]
 
 
 def aws_set_profile(profile_name, response):
@@ -299,7 +238,7 @@ def main():
                     help='the name of AWS profile to save the data in (default username)')
 
     args = parser.parse_args()
-    
+
     username = args.username
     saml_cfg_id = args.saml_config_id
 
@@ -307,31 +246,31 @@ def main():
         profile_name = args.profile_name
     else:
         profile_name = username
-    
+
     password = getpass()
 
     session = requests.Session()
+
     try:
-      lastpass_login(session, username, password)
-    except MfaRequiredException:
+      session = fetcher.login(username, password)
+    except:
       otp = input("OTP: ")
-      lastpass_login(session, username, password, otp)
+      session = fetcher.login(username, password, otp)
 
     assertion = get_saml_token(session, username, password, saml_cfg_id)
     roles = get_saml_aws_roles(assertion)
     user = get_saml_nameid(assertion)
 
     role = prompt_for_role(roles)
+    response = aws_assume_role(assertion, role[0], role[1])
+    aws_set_profile(profile_name, response[0])
 
-    response = aws_assume_role(session, assertion, role[0], role[1])
-    aws_set_profile(profile_name, response)
-
-    print "A new AWS CLI profile '%s' has been added." % profile_name
-    print "You may now invoke the aws CLI tool as follows:"
+    print ("A new AWS CLI profile '%s' has been added." % profile_name)
+    print ("You may now invoke the aws CLI tool as follows:")
     print
-    print "    aws --profile %s [...] " % profile_name
+    print ("    aws --profile %s [...] " % profile_name)
     print
-    print "This token expires in one hour."
+    print ("This profile is valid for %ds" % response[1] )
 
 
 if __name__ == "__main__":
